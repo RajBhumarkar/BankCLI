@@ -1,0 +1,12 @@
+/build*/
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+.vs/
+.env
+.env.*
+*-credential.xml
+.local/
+CMakeUserPresets.json
