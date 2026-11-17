@@ -1,4 +1,5 @@
 #include "BankService.h"
+#include "Account.h"
 #include <mysql_driver.h>
 #include <cppconn/statement.h>
 #include <cppconn/resultset.h>
@@ -20,6 +21,13 @@ void rejects(const std::function<void()>& operation, const std::string& message)
     try { operation(); } catch (const std::exception&) { failed = true; }
     require(failed, message);
 }
+// A late-write rollback test must fail for the intended SQL reason, not just any error.
+void rejectsSql(const std::function<void()>& operation, const std::string& message) {
+    bool failed = false;
+    try { operation(); }
+    catch (const sql::SQLException& error) { failed = error.getErrorCode() == 1644; }
+    require(failed, message);
+}
 void unitTests() {
     require(parseMoney("125.50") == 12550, "exact paise");
     require(parseMoney("0.1") == 10, "one decimal digit");
@@ -28,8 +36,8 @@ void unitTests() {
     for (const auto& value : {"", "-1", "+1", "1.001", "1.", ".5", "1e3", "1.2.3", "1 2", "92233720368547758.08"})
         rejects([&] { parseMoney(value); }, "invalid money");
     require(formatMoney(12550) == "Rs. 125.50", "formatting");
-    SavingsAccount savings(1, 60000);
-    CurrentAccount current(2, 60000);
+    SavingsAccount savings(60000);
+    CurrentAccount current(60000);
     Account* polymorphic = &savings;
     require(polymorphic->canWithdraw(10000), "savings exact minimum");
     require(!polymorphic->canWithdraw(10001), "savings minimum protected");
@@ -57,7 +65,8 @@ void integrationTests() {
         rows->next();
         return rows->getInt64(1);
     };
-    require(scalar("SELECT COUNT(*) FROM customers") == 0, "fresh test database");
+    require(scalar("SELECT (SELECT COUNT(*) FROM customers) + (SELECT COUNT(*) FROM accounts) + "
+                   "(SELECT COUNT(*) FROM transactions)") == 0, "fresh test database");
     rejects([&] { bank.createCustomer(" ", "9876543210"); }, "empty name");
     rejects([&] { bank.createCustomer("Alice", "123"); }, "invalid phone");
     const auto alice = bank.createCustomer("Alice O'Neil", "9876543210");
@@ -90,14 +99,14 @@ void integrationTests() {
                  "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Intentional rollback test'; END IF; END");
     try {
         const auto beforeRows = scalar("SELECT COUNT(*) FROM transactions");
-        rejects([&] { bank.transfer(a, b, 12345); }, "late transfer SQL failure");
+        rejectsSql([&] { bank.transfer(a, b, 12345); }, "late transfer SQL failure");
         require(bank.balance(a).balance == 400000 && bank.balance(b).balance == 300000, "rollback restores BOTH balances");
         require(scalar("SELECT COUNT(*) FROM transactions") == beforeRows, "rollback removes first history row");
-        rejects([&] { bank.deposit(a, 12345); }, "deposit SQL failure");
-        rejects([&] { bank.withdraw(a, 12345); }, "withdrawal SQL failure");
+        rejectsSql([&] { bank.deposit(a, 12345); }, "deposit SQL failure");
+        rejectsSql([&] { bank.withdraw(a, 12345); }, "withdrawal SQL failure");
         require(bank.balance(a).balance == 400000, "deposit and withdrawal rollback");
         const auto accountsBefore = scalar("SELECT COUNT(*) FROM accounts");
-        rejects([&] { bank.createAccount(bob, "CURRENT", 12345); }, "opening record SQL failure");
+        rejectsSql([&] { bank.createAccount(bob, "CURRENT", 12345); }, "opening record SQL failure");
         require(scalar("SELECT COUNT(*) FROM accounts") == accountsBefore, "account creation rollback");
         require(scalar("SELECT COUNT(*) FROM transactions") == beforeRows, "all failed histories rolled back");
     } catch (...) {

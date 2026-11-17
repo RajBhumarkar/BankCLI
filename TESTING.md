@@ -1,51 +1,77 @@
-# Verification record
+# Verification and test instructions
 
-Performed on 17 October 2026, Windows x64.
-
-## Toolchain
-
-- Visual Studio 18 2026 Build Tools; MSVC 19.51.
-- C++17 Release build, CMake 4.3.1-msvc1.
-- Official MySQL Community Server 8.4.11, portable ZIP.
-- Official MySQL Connector/C++ 26.7.0, JDBC-style API.
-- Server bound to 127.0.0.1:33307, separate workspace data directory.
-- Downloaded ZIP MD5 values matched the checksums on the official download pages.
-- Initial MinGW DLL problem bypassed using MSVC.
+Verified **17 November 2026**, Windows x64, using the updated source in this project.
 
 ## Actual results
 
-- CMake configured and compiled BankCLI and BankCLITests successfully.
-- CTest: account_rules passed.
-- Full integration suite: **66 checks passed**, repeated successfully in a second newly created database.
-- Menu-driven CLI: all seven features exercised using the restricted application database user.
-- CLI additionally checked invalid choices, duplicate phone, missing account, zero deposit, savings minimum failure, option 8 and end-of-input exit.
-- Application restarted in a new process: committed balances were retained.
-- MySQL cleanly shut down and restarted: Demo Alice retained Rs. 4000.00 and Demo Bob retained Rs. 3000.00.
-- local.ps1 Start, Run, Stop, Build and Test executed successfully.
+| Check | Result |
+| --- | --- |
+| CMake Release build of BankCLI and BankCLITests | Passed; no project compiler warnings. |
+| CTest `account_rules` | Passed. |
+| Complete unit + MySQL integration suite | **66 checks passed**: 20 unit and 46 integration checks. |
+| Two independent worker connections | 40 transfers each in opposite directions; **80 transfers completed**. |
+| Late transfer SQL failure | Both balances and the first inserted history row rolled back. |
+| Deposit, withdrawal, account-opening SQL failures | Pending balances/accounts/history rolled back. |
+| All seven menu features | Passed using a user with SELECT, INSERT, UPDATE only. |
+| Invalid menu/input cases | Passed: duplicate phone, missing account, invalid ID, zero deposit, excess decimals, savings minimum. |
+| Option 8 and end-of-input | Clean exit. |
+| `build.ps1` | Configured, built, copied DLLs, and ran CTest successfully. |
+| `run.ps1` | Launched the app, accepted scripted input, and restored connection/password environment variables. |
+| Fresh application process | Read the previously committed balances. |
+| Clean MySQL shutdown and restart | Alice remained at Rs. 4000.00, Bob at Rs. 3000.00; all six demonstration history records remained. |
 
-## What the 66 checks cover
+Integration output:
 
-Exact paise conversion; formatting; integer limit; malformed amounts; polymorphic savings/current withdrawal boundaries; empty name; invalid/duplicate phone; missing customer; opening minimum; apostrophe-safe name persistence; deposits; withdrawals; successful transfer; paired history; insufficient funds; minimum violation; self-transfer; missing accounts; zero/negative amounts; overflow; zero-opening history; history limit/order; SQL-failure rollback; concurrency; reconnect persistence.
-
-## Reproduce the important rollback test
-
-With the workspace server running:
-
-```powershell
-.\local.ps1 Test
+```text
+Rollback demo: A=4000.00, B=3000.00 before and after forced SQL failure.
+PASS: 66 checks.
 ```
 
-This creates a fresh database with a name ending in _test. It applies schema.sql and runs:
+The test server used a new data directory on 127.0.0.1:33317. No existing database was used or modified. The server was stopped after verification. Local credentials and server data are excluded from this project.
+
+Toolchain: MSVC 19.51.36260 (Visual Studio Build Tools 2026), CMake 4.3.1-msvc1, MySQL Community Server 8.4.11, Connector/C++ 26.7.0 with the JDBC-style API. Other toolchains were not tested in this update.
+
+## Run the unit checks
+
+Build using the README instructions. The build script runs CTest. You can also run the test program directly without a database connection:
 
 ```powershell
-.\build\Release\BankCLITests.exe --integration
+.\build\Release\BankCLITests.exe
 ```
 
-The script supplies the environment variables and test administrator credential. A fresh database is required for each integration run; the executable refuses a database whose name does not end in _test, and requires an empty customers table.
+Expected output: `PASS: 20 checks.` The connector DLLs still need to be beside the program.
 
-For another computer, create a new empty database ending in _test, apply schema.sql, and point BANKCLI_DB_HOST, BANKCLI_DB_NAME, BANKCLI_DB_USER and BANKCLI_DB_PASSWORD at it. The test user needs permissions to insert/update/select and the TRIGGER privilege. Use these elevated permissions only in the test database.
+These checks cover exact money conversion, formatting, integer limits, malformed amounts, savings minimums, current-account zero balance, and calls through an Account pointer.
 
-The test creates two accounts and performs a normal transfer. It then installs this test-only trigger:
+## Run all 66 checks against MySQL
+
+Use a **new, empty test database for every run**, with a name ending in `_test`. The suite refuses other names and checks that all three tables are empty. It keeps test rows afterward for inspection and removes its test trigger.
+
+From the project folder, connect using `mysql --host=127.0.0.1 --user=root -p`, then run the following at the `mysql>` prompt. Replace the password placeholder. If you already created the test user, skip CREATE USER and use its existing password.
+
+```sql
+CREATE DATABASE bankcli_run1_test CHARACTER SET utf8mb4;
+USE bankcli_run1_test;
+SOURCE schema.sql;
+
+CREATE USER 'bankcli_test'@'localhost' IDENTIFIED BY 'REPLACE_WITH_YOUR_TEST_PASSWORD';
+GRANT SELECT, INSERT, UPDATE, TRIGGER ON bankcli_run1_test.* TO 'bankcli_test'@'localhost';
+EXIT;
+```
+
+Then, in PowerShell:
+
+```powershell
+.\run.ps1 -Integration -Database bankcli_run1_test -User bankcli_test
+```
+
+Enter the test user's password. If the server uses another port, add `-Port YOUR_PORT`. For the next run, use a new name such as `bankcli_run2_test`, load the schema there, and grant the test user the same permissions on that database.
+
+The ordinary application user does not need TRIGGER permission. If your MySQL server has binary logging enabled and disallows a test user from creating triggers, use an administrator only in the isolated test database, or use a dedicated local test server with binary logging disabled. Do not relax permissions on the application database.
+
+## How the rollback test works
+
+The test installs a trigger only in the isolated test database:
 
 ```sql
 CREATE TRIGGER bankcli_test_failure
@@ -58,29 +84,18 @@ BEGIN
 END;
 ```
 
-It attempts a transfer of Rs. 123.45. Both UPDATE statements and TRANSFER_OUT execute; inserting TRANSFER_IN raises the SQL error. BankService catches it and calls ROLLBACK.
+It attempts a transfer of Rs. 123.45. Both balance updates and TRANSFER_OUT succeed first. The second history insert raises MySQL error 1644. The test checks that this specific SQL error occurred, then verifies that both balances and the total history count are unchanged after rollback. It also checks rollback for deposits, withdrawals, and opening an account. Valid operations work afterward.
 
-The test asserts:
-- Both balances match their pre-transfer values.
-- The total history row count is unchanged.
-- Failed deposit and withdrawal history writes undo their balance updates.
-- A failed opening-history write removes the new account as well.
-- Later valid transactions still work.
+## What the concurrency check proves
 
-The trigger is removed, including on test failure.
+Two worker connections transfer Rs. 1 back and forth between the same accounts, 40 times each. The test checks the final balances and that all 160 concurrent history records were saved, plus the two records from the earlier normal transfer. The failed transfer contributes no records.
 
-## Concurrency
+This checks correctness under that workload. It is not a throughput benchmark or exhaustive deadlock test.
 
-Two independent connections each perform 40 transfers of Rs. 1 in opposite directions between the same accounts. Both batches finish; final balances match expected values, and 162 transfer records exist (160 from concurrent transfers plus 2 from the earlier successful transfer). No partial history records remain from the failed transfer.
+## Recheck persistence manually
 
-## Run only account/parser tests
+Run the README demonstration in your application database. Exit, run the application again, and check the balances. Then exit, cleanly stop/start your own MySQL server using your normal service controls, and check again. Both balances and history should remain.
 
-```powershell
-ctest --test-dir build -C Release --output-on-failure
-```
+The automatic integration suite checks persistence through a new connection. The server-restart result above was verified separately; the test executable does not restart your server.
 
-No running database is required for these tests. Connector DLLs must still be present beside the executable.
-
-## Not claimed
-
-No production certification, load benchmark, crash/power-loss testing, exhaustive deadlock testing, remote TLS validation, or GitHub publication. SQL connection-loss outcome during COMMIT is not automatically resolved.
+No power-loss testing, production certification, remote TLS validation, or automatic recovery from a lost COMMIT response is claimed.

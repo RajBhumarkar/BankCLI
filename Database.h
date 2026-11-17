@@ -1,32 +1,38 @@
 #pragma once
-#include "Account.h"
+#include "Money.h"
 #include <memory>
 #include <vector>
 #include <cppconn/connection.h>
 #include <cppconn/prepared_statement.h>
 
-// Plain data records, not extra service classes.
+// Structs only carry query results; they have no business logic.
 struct AccountData {
     std::int64_t id;
     std::string customerName;
     std::string type;
     Money balance;
 };
+
 struct TransactionData {
     std::int64_t id;
     std::string type;
     Money amount;
     std::string timestamp;
 };
+
+// This class contains all SQL. BankService decides when to call each method.
 class Database {
+    // unique_ptr automatically closes/deletes a connector object, even on errors.
     std::unique_ptr<sql::Connection> connection_;
     std::unique_ptr<sql::PreparedStatement> prepare(const std::string& query);
     std::int64_t lastId();
+
 public:
     Database();
     void begin();
     void commit();
     void rollback();
+
     std::int64_t insertCustomer(const std::string& name, const std::string& phone);
     bool customerExists(std::int64_t id);
     std::int64_t insertAccount(std::int64_t customerId, const std::string& type, Money balance);

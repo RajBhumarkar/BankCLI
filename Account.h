@@ -1,27 +1,38 @@
 #pragma once
-#include <cstdint>
-#include <string>
-using Money = std::int64_t;
-Money parseMoney(const std::string& text);
-std::string formatMoney(Money paise);
+#include "Money.h"
 
+// These three classes answer one question: is this withdrawal allowed?
+// They do not read input, run SQL, or change the saved balance.
 class Account {
-    std::int64_t id_;
     Money balance_;
+
 public:
-    Account(std::int64_t id, Money balance);
+    explicit Account(Money balance) : balance_(balance) {
+        if (balance < 0) throw std::invalid_argument("Balance cannot be negative.");
+    }
     virtual ~Account() = default;
-    std::int64_t id() const { return id_; }
+
     Money balance() const { return balance_; }
     virtual bool canWithdraw(Money amount) const = 0;
 };
+
 class SavingsAccount : public Account {
 public:
-    using Account::Account;
-    bool canWithdraw(Money amount) const override;
+    explicit SavingsAccount(Money balance) : Account(balance) {}
+
+    bool canWithdraw(Money amount) const override {
+        // Savings must keep at least Rs. 500 after a withdrawal.
+        return amount > 0 && balance() >= SAVINGS_MINIMUM &&
+               amount <= balance() - SAVINGS_MINIMUM;
+    }
 };
+
 class CurrentAccount : public Account {
 public:
-    using Account::Account;
-    bool canWithdraw(Money amount) const override;
+    explicit CurrentAccount(Money balance) : Account(balance) {}
+
+    bool canWithdraw(Money amount) const override {
+        // Current accounts may reach zero, but cannot go below zero.
+        return amount > 0 && amount <= balance();
+    }
 };

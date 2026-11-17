@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 namespace {
+// Read a whole line so a bad entry cannot leave part of it in the input buffer.
 std::string readText(const std::string& prompt) {
     std::cout << prompt;
     std::string text;
@@ -41,6 +42,7 @@ int main() {
                 const auto choice = readText("Enter choice: ");
                 if (choice == "8") { std::cout << "Goodbye!\n"; break; }
                 if (choice == "1") {
+                    // The menu collects input; BankService does the banking work.
                     const auto name = readText("Full name: ");
                     const auto phone = readText("Phone (10 digits): ");
                     const auto id = bank.createCustomer(name, phone);
